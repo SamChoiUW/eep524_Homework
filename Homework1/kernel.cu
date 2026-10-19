@@ -4,9 +4,8 @@
 
 #include <stdio.h>
 #include "errorCheck.h"
+#include "homework1.h"
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-__global__ void printfKernel();
-    void printfKernelChecker();
 __global__ void addKernel(int *c, const int *a, const int *b)
 {
     int i = threadIdx.x;
@@ -14,17 +13,22 @@ __global__ void addKernel(int *c, const int *a, const int *b)
 } 
 
 int main() { 
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
      
-    printfKernelChecker();
+    //printfKernelChecker();
 
-    checkCuda(addWithCuda(c, a, b, arraySize), "addWithCuda");
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
+    /*
+    //the SAXPY testing
+    const float a = 3.0;
+    const int sizes[3] = { 10,1e3,1e7 };
+    int error = 0;
+    for (int i = 0; i < 3; i++) {
+        error += testSAXPY(sizes[i], a, 0.00001);
+    }
+    printf("any fails %d", error);
+    */
+
+
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     checkCuda(cudaDeviceReset(),"cudaDeviceReset");
@@ -150,6 +154,90 @@ that the kernel can perform bounds-checking.
 ○ N = 10 // this is a sanity check case to ensure it’s working right
 ○ N = 1e3 // scaling things up
 ○ N = 1e7 // everything still passing?
+*/
+__global__ void SAXPYkernel(int n, float a, const float *x, float *y) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < n) {
+        y[index] = a * x[index] + y[index];
+    }
+}
+void SAXPYkernelCPU(int n, float a, const float* x, float* y) {
+    for (int i = 0; i < n; i++) {
+        y[i] = a * x[i] + y[i];
+    }
+}
+int testSAXPY(int n, float a, float tol) {
+    int bytes = n * sizeof(float);
+
+    float* vectorX = (float*)malloc(bytes);
+    if (vectorX == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* vectorY = (float*)malloc(bytes);
+    if (vectorY == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* vectorYCPU = (float*)malloc(bytes);
+    if (vectorYCPU == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* vectorYGPU = (float*)malloc(bytes);
+    if (vectorYGPU == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+
+    //initialize to known vals
+    for (int i = 0; i < n; i++) {
+        vectorX[i] = (float)(i % 100) * 0.5f;
+        vectorY[i] = (float)(i % 50) * 0.25f;
+    }
+    memcpy(vectorYCPU, vectorY, bytes);
+    memcpy(vectorYGPU, vectorY, bytes);
+
+    //cpu test
+    SAXPYkernelCPU(n,  a, vectorX, vectorYCPU);
+
+    //gpu test
+    float* gpuX = nullptr;
+    float* gpuY = nullptr;
+    checkCuda(cudaMalloc(&gpuX, bytes), "cudaMalloc X");
+    checkCuda(cudaMalloc(&gpuY, bytes), "cudaMalloc Y");
+    checkCuda(cudaMemcpy(gpuX, vectorX, bytes, cudaMemcpyHostToDevice), "cudaMemcpy X");
+    checkCuda(cudaMemcpy(gpuY, vectorYGPU, bytes, cudaMemcpyHostToDevice), "cudaMemcpy Y");
+
+    checkCuda(cudaGetLastError(), "check");
+    int threadsPerBlock = 128;
+    int blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
+    printf("n=%d, blocks=%d,threadsPerBlock=%d\n", n, blocks, threadsPerBlock);
+    SAXPYkernel<<<blocks, threadsPerBlock >>>(n, a, gpuX, gpuY);
+    checkCuda(cudaGetLastError(), "SAXPYkernel");
+    checkCuda(cudaDeviceSynchronize(), "sync");
+
+    checkCuda(cudaMemcpy(vectorYGPU, gpuY, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy Y rtn");
+
+    int numberOfDifferences = 0;
+
+    for (int i = 0; i < n; i++) {
+        float diff = fabsf(vectorYGPU[i] - vectorYCPU[i]);
+        if (diff > tol) {
+            if (numberOfDifferences++ < 10) {
+                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n", i, vectorYCPU[i], vectorYGPU[i]);
+            }
+        }
+    }
+    if (numberOfDifferences != 0) {
+        printf("Number of Differences = %d\n", numberOfDifferences);
+    }
+    checkCuda(cudaFree(gpuX), "cudaFree gpuX");
+    checkCuda(cudaFree(gpuY), "cudaFree gpuY");
+    free(vectorX);
+    free(vectorY);
+    free(vectorYCPU);
+    free(vectorYGPU);
+
+    return numberOfDifferences;
+}
+/*
 2D matrix addition kernel
 In this kernel you’ll implement a 2D matrix addition using single-precision (32-bit) floats. The
 expression to be computed is
@@ -189,3 +277,4 @@ e. HW Q: which of the 3 kernels exhibits the most severe result disagreements
 between CPU and GPU versions? Why?
 i. submit results of any result discrepancies observed. A screenshot is fine.
 */
+
