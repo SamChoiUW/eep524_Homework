@@ -218,8 +218,8 @@ int testSAXPY(int n, float a) {
     }
     //initialize to known vals
     for (int i = 0; i < n; i++) {
-        vectorX[i] = (float)(i % 100) * 0.5f;
-        vectorY[i] = (float)(i % 50) * 0.25f;
+        vectorX[i] = (float)rand() / RAND_MAX;
+        vectorY[i] = (float)rand() / RAND_MAX;
     }
     memcpy(vectorYCPU, vectorY, bytes);
     memcpy(vectorYGPU, vectorY, bytes);
@@ -331,8 +331,8 @@ int testMatrixAddition(int m, int n) {
     for (int row = 0; row < m; row++) {
         for (int col = 0; col < n; col++) {
             index = ROW_MAJOR_INDEX;
-            matrixA[index] = (float)(index % 100) * 0.5f;
-            matrixB[index] = (float)(index % 100) * 0.25f;
+            matrixA[index] = (float)rand() / RAND_MAX;
+            matrixB[index] = (float)rand() / RAND_MAX;
         }
     }
 
@@ -466,8 +466,8 @@ int testVolumeGridAddition(int m, int n, int p) {
         for (int row = 0; row < m; row++) {
             for (int col = 0; col < n; col++) {
                 index = INDEX_3D;
-                volumeA[index] = (float)(index % 100) * 0.5f;
-                volumeB[index] = (float)(index % 100) * 0.25f;
+                volumeA[index] = (float)rand() / RAND_MAX;
+                volumeB[index] = (float)rand() / RAND_MAX;
             }
         }
     }
