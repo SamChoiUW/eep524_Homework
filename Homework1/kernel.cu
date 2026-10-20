@@ -277,7 +277,7 @@ void matrixAdditionCPU(int m, int n, float* a, float* b, float* c) {
         }
     }
 }
-int testSAXPY(int m, int n) {
+int testMatrixAddition(int m, int n) {
     int size = m * n;
     int bytes = size * sizeof(float);
 
@@ -431,13 +431,13 @@ int testVolumeGridAddition(int m, int n, int p) {
             for (int col = 0; col < n; col++) {
                 index = n * p * slice + p * col + row;
                 volumeA[index] = (float)(index % 100) * 0.5f;
-                volumeA[index] = (float)(index % 100) * 0.25f;
+                volumeB[index] = (float)(index % 100) * 0.25f;
             }
         }
     }
 
     //cpu test
-    matrixAdditionCPU(m, n, matrixA, matrixB, resultMatrixCPU);
+    volumeGridAdditionCPU(m, n, p, volumeA, volumeB, resultVolumeCPU);
 
     //gpu test
     float* gpuA = nullptr;
@@ -446,25 +446,26 @@ int testVolumeGridAddition(int m, int n, int p) {
     checkCuda(cudaMalloc(&gpuA, bytes), "cudaMalloc A");
     checkCuda(cudaMalloc(&gpuB, bytes), "cudaMalloc B");
     checkCuda(cudaMalloc(&gpuC, bytes), "cudaMalloc C");
-    checkCuda(cudaMemcpy(gpuA, matrixA, bytes, cudaMemcpyHostToDevice), "cudaMemcpy A");
-    checkCuda(cudaMemcpy(gpuB, matrixB, bytes, cudaMemcpyHostToDevice), "cudaMemcpy B");
+    checkCuda(cudaMemcpy(gpuA, volumeA, bytes, cudaMemcpyHostToDevice), "cudaMemcpy A");
+    checkCuda(cudaMemcpy(gpuB, volumeB, bytes, cudaMemcpyHostToDevice), "cudaMemcpy B");
 
-    dim3 dimBlock(16, 16, 1);
+    dim3 dimBlock(16, 16, 16);
     dim3 dimGrid((n - 1) / dimBlock.x + 1,
-        (m - 1) / dimBlock.y + 1);
-    matrixAdditionKernel << <dimGrid, dimBlock >> > (m, n, gpuA, gpuB, gpuC);
-    checkCuda(cudaGetLastError(), "matrixAdditionKernel");
+                 (m - 1) / dimBlock.y + 1,
+                 (p - 1) / dimBlock.z + 1);
+    volumeGridAdditionKernel<<<dimGrid, dimBlock>>>(m, n, p, gpuA, gpuB, gpuC);
+    checkCuda(cudaGetLastError(), "volumeGridAdditionKernel");
     checkCuda(cudaDeviceSynchronize(), "sync");
 
-    checkCuda(cudaMemcpy(resultMatrixGPU, gpuC, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy Y rtn");
+    checkCuda(cudaMemcpy(resultVolumeGPU, gpuC, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy Y rtn");
 
     int numberOfDifferences = 0;
 
     for (int i = 0; i < size; i++) {
-        if (testTolerance(resultMatrixCPU[i], resultMatrixGPU[i])) {
+        if (testTolerance(resultVolumeCPU[i], resultVolumeGPU[i])) {
             if (numberOfDifferences++ < 10) {
                 fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n",
-                    i, resultMatrixCPU[i], resultMatrixGPU[i]);
+                    i, resultVolumeCPU[i], resultVolumeGPU[i]);
             }
         }
     }
@@ -474,10 +475,10 @@ int testVolumeGridAddition(int m, int n, int p) {
     checkCuda(cudaFree(gpuA), "cudaFree gpuA");
     checkCuda(cudaFree(gpuB), "cudaFree gpuB");
     checkCuda(cudaFree(gpuC), "cudaFree gpuC");
-    free(matrixA);
-    free(matrixB);
-    free(resultMatrixCPU);
-    free(resultMatrixGPU);
+    free(volumeA);
+    free(volumeB);
+    free(resultVolumeCPU);
+    free(resultVolumeGPU);
 
     return numberOfDifferences;
 }
