@@ -13,6 +13,7 @@ __global__ void addKernel(int *c, const int *a, const int *b)
 } 
 
 int main() { 
+    int error = 0;
      
     //printfKernelChecker();
 
@@ -21,18 +22,23 @@ int main() {
     //the SAXPY testing
     const float a = 3.0;
     const int sizes[3] = { 10,1e3,1e7 };
-    int error = 0;
     for (int i = 0; i < 3; i++) {
         error += testSAXPY(sizes[i], a);
     }
-    printf("any fails %d", error);
     */
 
+    //matrixAddition Testing
+    int matrixSizes[3][2] = { {4,4}, {500,500},{3024,4032} };
+        error += testMatrixAddition(matrixSizes[0][0],matrixSizes[0][1]);
+    for (int i = 0; i < 3; i++) {
+    }
 
+    int volumeSizes[3][3] = { {3,3,3}, {100,100,100},{1e3,1e3,1e3} };
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     checkCuda(cudaDeviceReset(),"cudaDeviceReset");
 
+    printf("any fails %d", error);
     return 0;
 }
 
@@ -263,16 +269,17 @@ perform the 2D bounds-checking on each thread of execution.
 __global__ void  matrixAdditionKernel(int m,int n, float* a, float* b, float* c) {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int col = blockIdx.y * blockDim.y + threadIdx.y;
-    int index = row * n + col;
     if (row < m && col < n) {
+        int index = ROW_MAJOR_INDEX;
         c[index] = a[index] + b[index];
+        printf("Index is: %d, a is %f, b is %f, c is %f\n", a[index], b[index], c[index]);
     }
 }
 void matrixAdditionCPU(int m, int n, float* a, float* b, float* c) {
     int index = 0;
     for (int row = 0; row < m; row++) {
         for (int col = 0; col < n; col++) {
-            index = row * n + col;
+            index = ROW_MAJOR_INDEX;
             c[index] = a[index] + b[index];
         }
     }
@@ -302,7 +309,7 @@ int testMatrixAddition(int m, int n) {
     int index = 0;
     for (int row = 0; row < m; row++) {
         for (int col = 0; col < n; col++) {
-            index = row * n + col;
+            index = ROW_MAJOR_INDEX;
             matrixA[index] = (float)(index % 100) * 0.5f;
             matrixB[index] = (float)(index % 100) * 0.25f;
         }
