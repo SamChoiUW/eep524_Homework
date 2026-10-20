@@ -7,4 +7,4 @@ int testMatrixAddition(int m, int n);
 void volumeGridAdditionCPU(int m, int n, int p, float* a, float* b, float* c);
 int testVolumeGridAddition(int m, int n, int p);
 #define ROW_MAJOR_INDEX row * n + col
-#define ROW_3D_MAJOR_INDEX (slice * m + row) * n + col
+#define INDEX_3D (slice * m * n) + row * n + col

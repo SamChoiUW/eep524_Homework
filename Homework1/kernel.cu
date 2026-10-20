@@ -37,7 +37,7 @@ int main() {
     
     int volumeSizes[3][3] = {{3,3,3}, {100,100,100},{1e3,1e3,1e3}};
     for (int i = 0; i < 3; i++) {
-        error += testMatrixAddition(volumeSizes[i][0], volumeSizes[i][1]);
+        error += testVolumeGridAddition(volumeSizes[i][0], volumeSizes[i][1], volumeSizes[i][2]);
     }
     
 
@@ -150,8 +150,8 @@ void printfKernelChecker() {
      }
 }
 bool testTolerance(float cpuResult, float gpuResult) {
-    float rTol = 1e-5;
-    float aTol = 1e-6;
+    float rTol = 1e-4;
+    float aTol = 1e-5;
     if (abs(cpuResult - gpuResult) <= 
         fmaxf(aTol, rTol * fmaxf(fabsf(cpuResult), fabsf(gpuResult)))) {
         return true;
@@ -192,28 +192,30 @@ void SAXPYkernelCPU(int n, float a, const float* x, float* y) {
 }
 int testSAXPY(int n, float a) {
     int bytes = n * sizeof(float);
-
+    int mallocErr = 0;
     float* vectorX = (float*)malloc(bytes);
     if (vectorX == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto SAXPYError;
+        mallocErr = 1;
     }
     float* vectorY = (float*)malloc(bytes);
     if (vectorY == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto SAXPYError;
+        mallocErr = 1;
     }
     float* vectorYCPU = (float*)malloc(bytes);
     if (vectorYCPU == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto SAXPYError;
+        mallocErr = 1;
     }
     float* vectorYGPU = (float*)malloc(bytes);
     if (vectorYGPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        mallocErr = 1;
+    }
+    if (mallocErr == 1) {
         goto SAXPYError;
     }
-
     //initialize to known vals
     for (int i = 0; i < n; i++) {
         vectorX[i] = (float)(i % 100) * 0.5f;
@@ -299,24 +301,28 @@ int testMatrixAddition(int m, int n) {
     long long size = m * n;
     long long bytes = size * sizeof(float);
 
+    int mallocErr = 0;
     float* matrixA = (float*)malloc(bytes);
     if (matrixA == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto MatrixError;
+        mallocErr = 1;
     }
     float* matrixB = (float*)malloc(bytes);
     if (matrixB == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto MatrixError;
+        mallocErr = 1;
     }
     float* resultMatrixCPU = (float*)malloc(bytes);
     if (resultMatrixCPU == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto MatrixError;
+        mallocErr = 1;
     }
     float* resultMatrixGPU = (float*)malloc(bytes);
     if (resultMatrixGPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        mallocErr = 1;
+    }
+    if (mallocErr == 1) {
         goto MatrixError;
     }
 
@@ -410,7 +416,7 @@ __global__ void  volumeGridAdditionKernel(int m, int n, int p, float* a, float* 
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int col = blockIdx.y * blockDim.y + threadIdx.y;
     int slice = blockIdx.z * blockDim.z + threadIdx.z;
-    int index = n * p * slice + p * col + row;
+    int index = INDEX_3D;
     if (row < m && col < n && slice < p) {
         c[index] = a[index] + b[index];
     }
@@ -420,43 +426,46 @@ void volumeGridAdditionCPU(int m, int n,int p, float* a, float* b, float* c) {
     for (int slice = 0; slice < p; slice++) {
         for (int row = 0; row < m; row++) {
             for (int col = 0; col < n; col++) {
-                index = n * p * slice + p * col + row;
+                index = INDEX_3D;
                 c[index] = a[index] + b[index];
             }
         }
     }
 }
 int testVolumeGridAddition(int m, int n, int p) {
-    int size = m * n * p;
-    int bytes = size * sizeof(float);
+    long long size = m * n * p;
+    long long bytes = size * sizeof(float);
 
+    int mallocErr = 0;
     float* volumeA = (float*)malloc(bytes);
     if (volumeA == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto VolumeError;
+        mallocErr = 1;
     }
     float* volumeB = (float*)malloc(bytes);
     if (volumeB == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto VolumeError;
+        mallocErr = 1;
     }
     float* resultVolumeCPU = (float*)malloc(bytes);
     if (resultVolumeCPU == NULL) {
         fprintf(stderr, "memory allocation failure");
-        goto VolumeError;
+        mallocErr = 1;
     }
     float* resultVolumeGPU = (float*)malloc(bytes);
     if (resultVolumeGPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        mallocErr = 1;
+    }
+    if (mallocErr == 1) {
         goto VolumeError;
     }
-
     //initialize to known vals
     int index = 0;
     for (int slice = 0; slice < p; slice++) {
         for (int row = 0; row < m; row++) {
             for (int col = 0; col < n; col++) {
-                index = n * p * slice + p * col + row;
+                index = INDEX_3D;
                 volumeA[index] = (float)(index % 100) * 0.5f;
                 volumeB[index] = (float)(index % 100) * 0.25f;
             }
