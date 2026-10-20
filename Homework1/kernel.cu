@@ -278,7 +278,8 @@ void matrixAdditionCPU(int m, int n, float* a, float* b, float* c) {
     }
 }
 int testSAXPY(int m, int n) {
-    int bytes = n * sizeof(float);
+    int size = m * n;
+    int bytes = size * sizeof(float);
 
     float* matrixA = (float*)malloc(bytes);
     if (matrixA == NULL) {
@@ -313,40 +314,42 @@ int testSAXPY(int m, int n) {
     //gpu test
     float* gpuA = nullptr;
     float* gpuB = nullptr;
+    float* gpuC = nullptr;
     checkCuda(cudaMalloc(&gpuA, bytes), "cudaMalloc A");
     checkCuda(cudaMalloc(&gpuB, bytes), "cudaMalloc B");
+    checkCuda(cudaMalloc(&gpuC, bytes), "cudaMalloc C");
     checkCuda(cudaMemcpy(gpuA, matrixA, bytes, cudaMemcpyHostToDevice), "cudaMemcpy A");
     checkCuda(cudaMemcpy(gpuB, matrixB, bytes, cudaMemcpyHostToDevice), "cudaMemcpy B");
 
-    checkCuda(cudaGetLastError(), "check");
-    int threadsPerBlock = 128;
-    int blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
-    printf("n=%d, blocks=%d,threadsPerBlock=%d\n", n, blocks, threadsPerBlock);
-    SAXPYkernel << <blocks, threadsPerBlock >> > (n, a, gpuX, gpuY);
-    checkCuda(cudaGetLastError(), "SAXPYkernel");
+    dim3 dimBlock(16,16,1);
+    dim3 dimGrid((n - 1) / dimBlock.x + 1,
+        (m - 1) / dimBlock.y + 1);
+    matrixAdditionKernel<<<dimGrid, dimBlock>>>(m, n, gpuA, gpuB, gpuC);
+    checkCuda(cudaGetLastError(), "matrixAdditionKernel");
     checkCuda(cudaDeviceSynchronize(), "sync");
 
-    checkCuda(cudaMemcpy(vectorYGPU, gpuY, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy Y rtn");
+    checkCuda(cudaMemcpy(resultMatrixGPU, gpuC, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy Y rtn");
 
     int numberOfDifferences = 0;
 
-    for (int i = 0; i < n; i++) {
-        float diff = fabsf(vectorYGPU[i] - vectorYCPU[i]);
-        if (diff > tol) {
+    for (int i = 0; i < size; i++) {
+        if (testTolerance(resultMatrixCPU[i], resultMatrixGPU[i])) {
             if (numberOfDifferences++ < 10) {
-                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n", i, vectorYCPU[i], vectorYGPU[i]);
+                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n",
+                                i, resultMatrixCPU[i], resultMatrixGPU[i]);
             }
         }
     }
     if (numberOfDifferences != 0) {
         printf("Number of Differences = %d\n", numberOfDifferences);
     }
-    checkCuda(cudaFree(gpuX), "cudaFree gpuX");
-    checkCuda(cudaFree(gpuY), "cudaFree gpuY");
-    free(vectorX);
-    free(vectorY);
-    free(vectorYCPU);
-    free(vectorYGPU);
+    checkCuda(cudaFree(gpuA), "cudaFree gpuA");
+    checkCuda(cudaFree(gpuB), "cudaFree gpuB");
+    checkCuda(cudaFree(gpuC), "cudaFree gpuC");
+    free(matrixA);
+    free(matrixB);
+    free(resultMatrixCPU);
+    free(resultMatrixGPU);
 
     return numberOfDifferences;
 }
@@ -380,4 +383,101 @@ e. HW Q: which of the 3 kernels exhibits the most severe result disagreements
 between CPU and GPU versions? Why?
 i. submit results of any result discrepancies observed. A screenshot is fine.
 */
+__global__ void  volumeGridAdditionKernel(int m, int n, int p, float* a, float* b, float* c) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    int slice = blockIdx.z * blockDim.z + threadIdx.z;
+    int index = n * p * slice + p * col + row;
+    if (row < m && col < n && slice < p) {
+        c[index] = a[index] + b[index];
+    }
+}
+void volumeGridAdditionCPU(int m, int n,int p, float* a, float* b, float* c) {
+    int index = 0;
+    for (int slice = 0; slice < p; slice++) {
+        for (int row = 0; row < m; row++) {
+            for (int col = 0; col < n; col++) {
+                index = n * p * slice + p * col + row;
+                c[index] = a[index] + b[index];
+            }
+        }
+    }
+}
+int testVolumeGridAddition(int m, int n, int p) {
+    int size = m * n * p;
+    int bytes = size * sizeof(float);
 
+    float* volumeA = (float*)malloc(bytes);
+    if (volumeA == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* volumeB = (float*)malloc(bytes);
+    if (volumeB == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* resultVolumeCPU = (float*)malloc(bytes);
+    if (resultVolumeCPU == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* resultVolumeGPU = (float*)malloc(bytes);
+    if (resultVolumeGPU == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+
+    //initialize to known vals
+    int index = 0;
+    for (int slice = 0; slice < p; slice++) {
+        for (int row = 0; row < m; row++) {
+            for (int col = 0; col < n; col++) {
+                index = n * p * slice + p * col + row;
+                volumeA[index] = (float)(index % 100) * 0.5f;
+                volumeA[index] = (float)(index % 100) * 0.25f;
+            }
+        }
+    }
+
+    //cpu test
+    matrixAdditionCPU(m, n, matrixA, matrixB, resultMatrixCPU);
+
+    //gpu test
+    float* gpuA = nullptr;
+    float* gpuB = nullptr;
+    float* gpuC = nullptr;
+    checkCuda(cudaMalloc(&gpuA, bytes), "cudaMalloc A");
+    checkCuda(cudaMalloc(&gpuB, bytes), "cudaMalloc B");
+    checkCuda(cudaMalloc(&gpuC, bytes), "cudaMalloc C");
+    checkCuda(cudaMemcpy(gpuA, matrixA, bytes, cudaMemcpyHostToDevice), "cudaMemcpy A");
+    checkCuda(cudaMemcpy(gpuB, matrixB, bytes, cudaMemcpyHostToDevice), "cudaMemcpy B");
+
+    dim3 dimBlock(16, 16, 1);
+    dim3 dimGrid((n - 1) / dimBlock.x + 1,
+        (m - 1) / dimBlock.y + 1);
+    matrixAdditionKernel << <dimGrid, dimBlock >> > (m, n, gpuA, gpuB, gpuC);
+    checkCuda(cudaGetLastError(), "matrixAdditionKernel");
+    checkCuda(cudaDeviceSynchronize(), "sync");
+
+    checkCuda(cudaMemcpy(resultMatrixGPU, gpuC, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy Y rtn");
+
+    int numberOfDifferences = 0;
+
+    for (int i = 0; i < size; i++) {
+        if (testTolerance(resultMatrixCPU[i], resultMatrixGPU[i])) {
+            if (numberOfDifferences++ < 10) {
+                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n",
+                    i, resultMatrixCPU[i], resultMatrixGPU[i]);
+            }
+        }
+    }
+    if (numberOfDifferences != 0) {
+        printf("Number of Differences = %d\n", numberOfDifferences);
+    }
+    checkCuda(cudaFree(gpuA), "cudaFree gpuA");
+    checkCuda(cudaFree(gpuB), "cudaFree gpuB");
+    checkCuda(cudaFree(gpuC), "cudaFree gpuC");
+    free(matrixA);
+    free(matrixB);
+    free(resultMatrixCPU);
+    free(resultMatrixGPU);
+
+    return numberOfDifferences;
+}
