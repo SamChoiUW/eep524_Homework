@@ -23,7 +23,7 @@ int main() {
     const int sizes[3] = { 10,1e3,1e7 };
     int error = 0;
     for (int i = 0; i < 3; i++) {
-        error += testSAXPY(sizes[i], a, 0.00001);
+        error += testSAXPY(sizes[i], a);
     }
     printf("any fails %d", error);
     */
@@ -136,6 +136,17 @@ void printfKernelChecker() {
 
      }
 }
+bool testTolerance(float cpuResult, float gpuResult) {
+    float rTol = 1e-5;
+    float aTol = 1e-6;
+    if (abs(cpuResult - gpuResult) <= 
+        max(aTol, rTol * max(abs(cpuResult), abs(gpuResult)))) {
+        return true;
+    }
+    else {
+        return false;
+    }
+}
 /*
 SAXPY kernel
 SAXPY stands for Single-Precision A times X plus Y.
@@ -166,7 +177,7 @@ void SAXPYkernelCPU(int n, float a, const float* x, float* y) {
         y[i] = a * x[i] + y[i];
     }
 }
-int testSAXPY(int n, float a, float tol) {
+int testSAXPY(int n, float a) {
     int bytes = n * sizeof(float);
 
     float* vectorX = (float*)malloc(bytes);
@@ -218,8 +229,7 @@ int testSAXPY(int n, float a, float tol) {
     int numberOfDifferences = 0;
 
     for (int i = 0; i < n; i++) {
-        float diff = fabsf(vectorYGPU[i] - vectorYCPU[i]);
-        if (diff > tol) {
+        if (testTolerance(vectorYCPU[i], vectorYGPU[i]) == false) {
             if (numberOfDifferences++ < 10) {
                 fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n", i, vectorYCPU[i], vectorYGPU[i]);
             }
@@ -249,6 +259,99 @@ perform the 2D bounds-checking on each thread of execution.
 ○ MxN = 4x4 // this is a sanity check case to ensure it’s working right
 ○ 500x500 // this is a small matrix
 ○ 3024x4032 // like a 12MP iPhone image resolution!
+*/
+__global__ void  matrixAdditionKernel(int m,int n, float* a, float* b, float* c) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    int index = row * n + col;
+    if (row < m && col < n) {
+        c[index] = a[index] + b[index];
+    }
+}
+void matrixAdditionCPU(int m, int n, float* a, float* b, float* c) {
+    int index = 0;
+    for (int row = 0; row < m; row++) {
+        for (int col = 0; col < n; col++) {
+            index = row * n + col;
+            c[index] = a[index] + b[index];
+        }
+    }
+}
+int testSAXPY(int m, int n) {
+    int bytes = n * sizeof(float);
+
+    float* matrixA = (float*)malloc(bytes);
+    if (matrixA == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* matrixB = (float*)malloc(bytes);
+    if (matrixB == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* resultMatrixCPU = (float*)malloc(bytes);
+    if (resultMatrixCPU == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+    float* resultMatrixGPU = (float*)malloc(bytes);
+    if (resultMatrixGPU == NULL) {
+        fprintf(stderr, "memory allocation failure");
+    }
+
+    //initialize to known vals
+    int index = 0;
+    for (int row = 0; row < m; row++) {
+        for (int col = 0; col < n; col++) {
+            index = row * n + col;
+            matrixA[index] = (float)(index % 100) * 0.5f;
+            matrixB[index] = (float)(index % 100) * 0.25f;
+        }
+    }
+
+    //cpu test
+    matrixAdditionCPU(m, n, matrixA, matrixB, resultMatrixCPU);
+
+    //gpu test
+    float* gpuA = nullptr;
+    float* gpuB = nullptr;
+    checkCuda(cudaMalloc(&gpuA, bytes), "cudaMalloc A");
+    checkCuda(cudaMalloc(&gpuB, bytes), "cudaMalloc B");
+    checkCuda(cudaMemcpy(gpuA, matrixA, bytes, cudaMemcpyHostToDevice), "cudaMemcpy A");
+    checkCuda(cudaMemcpy(gpuB, matrixB, bytes, cudaMemcpyHostToDevice), "cudaMemcpy B");
+
+    checkCuda(cudaGetLastError(), "check");
+    int threadsPerBlock = 128;
+    int blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
+    printf("n=%d, blocks=%d,threadsPerBlock=%d\n", n, blocks, threadsPerBlock);
+    SAXPYkernel << <blocks, threadsPerBlock >> > (n, a, gpuX, gpuY);
+    checkCuda(cudaGetLastError(), "SAXPYkernel");
+    checkCuda(cudaDeviceSynchronize(), "sync");
+
+    checkCuda(cudaMemcpy(vectorYGPU, gpuY, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy Y rtn");
+
+    int numberOfDifferences = 0;
+
+    for (int i = 0; i < n; i++) {
+        float diff = fabsf(vectorYGPU[i] - vectorYCPU[i]);
+        if (diff > tol) {
+            if (numberOfDifferences++ < 10) {
+                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n", i, vectorYCPU[i], vectorYGPU[i]);
+            }
+        }
+    }
+    if (numberOfDifferences != 0) {
+        printf("Number of Differences = %d\n", numberOfDifferences);
+    }
+    checkCuda(cudaFree(gpuX), "cudaFree gpuX");
+    checkCuda(cudaFree(gpuY), "cudaFree gpuY");
+    free(vectorX);
+    free(vectorY);
+    free(vectorYCPU);
+    free(vectorYGPU);
+
+    return numberOfDifferences;
+}
+
+/*
 3D volume grid addition kernel
 In this kernel you’ll implement a 3D grid addition. The expression to be computed is
 C = A + B
