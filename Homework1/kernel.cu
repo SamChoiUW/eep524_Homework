@@ -28,12 +28,19 @@ int main() {
     */
 
     //matrixAddition Testing
+    /*
     int matrixSizes[3][2] = { {4,4}, {500,500},{3024,4032} };
-        error += testMatrixAddition(matrixSizes[0][0],matrixSizes[0][1]);
     for (int i = 0; i < 3; i++) {
+        error += testMatrixAddition(matrixSizes[i][0],matrixSizes[i][1]);
     }
+    */
+    
+    int volumeSizes[3][3] = {{3,3,3}, {100,100,100},{1e3,1e3,1e3}};
+    for (int i = 0; i < 3; i++) {
+        error += testMatrixAddition(volumeSizes[i][0], volumeSizes[i][1]);
+    }
+    
 
-    int volumeSizes[3][3] = { {3,3,3}, {100,100,100},{1e3,1e3,1e3} };
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     checkCuda(cudaDeviceReset(),"cudaDeviceReset");
@@ -125,7 +132,7 @@ __global__ void printfKernel() {
     int blockID = blockIdx.x;
     int GTID = blockID * blockDim.x + threadID;
 
-    printf("the thread IDx.x is: %d\nthe block IDx.x is: %d\nthe GTID is: %d\n", threadID, blockID, GTID);
+    printf("the thread IDx.x is: %d\tthe block IDx.x is: %d\tthe GTID is: %d\t", threadID, blockID, GTID);
 }
  
 void printfKernelChecker() {
@@ -146,7 +153,7 @@ bool testTolerance(float cpuResult, float gpuResult) {
     float rTol = 1e-5;
     float aTol = 1e-6;
     if (abs(cpuResult - gpuResult) <= 
-        max(aTol, rTol * max(abs(cpuResult), abs(gpuResult)))) {
+        fmaxf(aTol, rTol * fmaxf(fabsf(cpuResult), fabsf(gpuResult)))) {
         return true;
     }
     else {
@@ -189,18 +196,22 @@ int testSAXPY(int n, float a) {
     float* vectorX = (float*)malloc(bytes);
     if (vectorX == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto SAXPYError;
     }
     float* vectorY = (float*)malloc(bytes);
     if (vectorY == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto SAXPYError;
     }
     float* vectorYCPU = (float*)malloc(bytes);
     if (vectorYCPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto SAXPYError;
     }
     float* vectorYGPU = (float*)malloc(bytes);
     if (vectorYGPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto SAXPYError;
     }
 
     //initialize to known vals
@@ -237,13 +248,14 @@ int testSAXPY(int n, float a) {
     for (int i = 0; i < n; i++) {
         if (testTolerance(vectorYCPU[i], vectorYGPU[i]) == false) {
             if (numberOfDifferences++ < 10) {
-                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n", i, vectorYCPU[i], vectorYGPU[i]);
+                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value: %f\n", i, vectorYCPU[i], vectorYGPU[i]);
             }
         }
     }
     if (numberOfDifferences != 0) {
         printf("Number of Differences = %d\n", numberOfDifferences);
     }
+SAXPYError:
     checkCuda(cudaFree(gpuX), "cudaFree gpuX");
     checkCuda(cudaFree(gpuY), "cudaFree gpuY");
     free(vectorX);
@@ -267,12 +279,11 @@ perform the 2D bounds-checking on each thread of execution.
 ○ 3024x4032 // like a 12MP iPhone image resolution!
 */
 __global__ void  matrixAdditionKernel(int m,int n, float* a, float* b, float* c) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
     if (row < m && col < n) {
         int index = ROW_MAJOR_INDEX;
         c[index] = a[index] + b[index];
-        printf("Index is: %d, a is %f, b is %f, c is %f\n", a[index], b[index], c[index]);
     }
 }
 void matrixAdditionCPU(int m, int n, float* a, float* b, float* c) {
@@ -285,24 +296,28 @@ void matrixAdditionCPU(int m, int n, float* a, float* b, float* c) {
     }
 }
 int testMatrixAddition(int m, int n) {
-    int size = m * n;
-    int bytes = size * sizeof(float);
+    long long size = m * n;
+    long long bytes = size * sizeof(float);
 
     float* matrixA = (float*)malloc(bytes);
     if (matrixA == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto MatrixError;
     }
     float* matrixB = (float*)malloc(bytes);
     if (matrixB == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto MatrixError;
     }
     float* resultMatrixCPU = (float*)malloc(bytes);
     if (resultMatrixCPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto MatrixError;
     }
     float* resultMatrixGPU = (float*)malloc(bytes);
     if (resultMatrixGPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto MatrixError;
     }
 
     //initialize to known vals
@@ -340,9 +355,9 @@ int testMatrixAddition(int m, int n) {
     int numberOfDifferences = 0;
 
     for (int i = 0; i < size; i++) {
-        if (testTolerance(resultMatrixCPU[i], resultMatrixGPU[i])) {
+        if (testTolerance(resultMatrixCPU[i], resultMatrixGPU[i]) == false) {
             if (numberOfDifferences++ < 10) {
-                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n",
+                fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value: %f\n",
                                 i, resultMatrixCPU[i], resultMatrixGPU[i]);
             }
         }
@@ -350,6 +365,7 @@ int testMatrixAddition(int m, int n) {
     if (numberOfDifferences != 0) {
         printf("Number of Differences = %d\n", numberOfDifferences);
     }
+MatrixError:
     checkCuda(cudaFree(gpuA), "cudaFree gpuA");
     checkCuda(cudaFree(gpuB), "cudaFree gpuB");
     checkCuda(cudaFree(gpuC), "cudaFree gpuC");
@@ -417,18 +433,22 @@ int testVolumeGridAddition(int m, int n, int p) {
     float* volumeA = (float*)malloc(bytes);
     if (volumeA == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto VolumeError;
     }
     float* volumeB = (float*)malloc(bytes);
     if (volumeB == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto VolumeError;
     }
     float* resultVolumeCPU = (float*)malloc(bytes);
     if (resultVolumeCPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto VolumeError;
     }
     float* resultVolumeGPU = (float*)malloc(bytes);
     if (resultVolumeGPU == NULL) {
         fprintf(stderr, "memory allocation failure");
+        goto VolumeError;
     }
 
     //initialize to known vals
@@ -456,7 +476,7 @@ int testVolumeGridAddition(int m, int n, int p) {
     checkCuda(cudaMemcpy(gpuA, volumeA, bytes, cudaMemcpyHostToDevice), "cudaMemcpy A");
     checkCuda(cudaMemcpy(gpuB, volumeB, bytes, cudaMemcpyHostToDevice), "cudaMemcpy B");
 
-    dim3 dimBlock(16, 16, 16);
+    dim3 dimBlock(8, 8, 8);
     dim3 dimGrid((n - 1) / dimBlock.x + 1,
                  (m - 1) / dimBlock.y + 1,
                  (p - 1) / dimBlock.z + 1);
@@ -469,7 +489,7 @@ int testVolumeGridAddition(int m, int n, int p) {
     int numberOfDifferences = 0;
 
     for (int i = 0; i < size; i++) {
-        if (testTolerance(resultVolumeCPU[i], resultVolumeGPU[i])) {
+        if (testTolerance(resultVolumeCPU[i], resultVolumeGPU[i]) == false) {
             if (numberOfDifferences++ < 10) {
                 fprintf(stderr, "difference at %d\nCPU Value: %f\nGPU Value\n",
                     i, resultVolumeCPU[i], resultVolumeGPU[i]);
@@ -479,6 +499,7 @@ int testVolumeGridAddition(int m, int n, int p) {
     if (numberOfDifferences != 0) {
         printf("Number of Differences = %d\n", numberOfDifferences);
     }
+VolumeError:
     checkCuda(cudaFree(gpuA), "cudaFree gpuA");
     checkCuda(cudaFree(gpuB), "cudaFree gpuB");
     checkCuda(cudaFree(gpuC), "cudaFree gpuC");
