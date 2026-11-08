@@ -5,7 +5,7 @@
 #include <cstdlib>
 
 #ifndef PROFILE_MODE
-#define PROFILE_MODE 0
+#define PROFILE_MODE 1
 #endif
 
 #if PROFILE_MODE

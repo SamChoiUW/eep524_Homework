@@ -38,6 +38,7 @@ __global__ void mmult_gmem(const float* M, const float* N, float* P, int J, int 
     }
 }
 
+template <int TILE_WIDTH, bool USE_FMA>
 __global__ void mmult_tiled(const float* M, const float* N, float* P, int J, int K, int L)
 {
     __shared__ float ds_M[TILE_WIDTH][TILE_WIDTH];
@@ -52,19 +53,25 @@ __global__ void mmult_tiled(const float* M, const float* N, float* P, int J, int
     for (int p = 0; p < (K - 1) / TILE_WIDTH + 1; ++p) {
         if (Row < J && p * TILE_WIDTH + tx < K) {
             ds_M[ty][tx] = M[Row * K + p * TILE_WIDTH + tx];
-        } else {
+        }
+        else {
             ds_M[ty][tx] = 0.0f;
         }
         if (p * TILE_WIDTH + ty < K && Col < L) {
             ds_N[ty][tx] = N[(p * TILE_WIDTH + ty) * L + Col];
-        } else {
+        }
+        else {
             ds_N[ty][tx] = 0.0f;
         }
         __syncthreads();
 
         if (Row < J && Col < L) {
-            for (int i = 0; i < TILE_WIDTH; ++i)
-                Pvalue += ds_M[ty][i] * ds_N[i][tx];
+            for (int i = 0; i < TILE_WIDTH; ++i) {
+                if (USE_FMA)
+                    Pvalue += ds_M[ty][i] * ds_N[i][tx];
+                else
+                    Pvalue = __fadd_rn(Pvalue, __fmul_rn(ds_M[ty][i], ds_N[i][tx]));
+            }
         }
         __syncthreads();
     }
@@ -105,6 +112,7 @@ __global__ void mmult_gmem_NT(const float* M, const float* Nt, float* P, int J, 
     }
 }
 
+template <int TILE_WIDTH>
 __global__ void mmult_tiled_NT(const float* M, const float* Nt, float* P, int J, int K, int L)
 {
     __shared__ float ds_M[TILE_WIDTH][TILE_WIDTH];
@@ -112,20 +120,22 @@ __global__ void mmult_tiled_NT(const float* M, const float* Nt, float* P, int J,
 
     int bx = blockIdx.x;  int by = blockIdx.y;
     int tx = threadIdx.x; int ty = threadIdx.y;
-    int Row   = by * blockDim.y + ty;
-    int Col   = bx * blockDim.x + tx;
+    int Row = by * blockDim.y + ty;
+    int Col = bx * blockDim.x + tx;
     int NtRow = bx * blockDim.x + ty;
     float Pvalue = 0;
 
     for (int p = 0; p < (K - 1) / TILE_WIDTH + 1; ++p) {
         if (Row < J && p * TILE_WIDTH + tx < K) {
             ds_M[ty][tx] = M[Row * K + p * TILE_WIDTH + tx];
-        } else {
+        }
+        else {
             ds_M[ty][tx] = 0.0f;
         }
         if (NtRow < L && p * TILE_WIDTH + tx < K) {
             ds_N[tx][ty] = Nt[NtRow * K + p * TILE_WIDTH + tx];
-        } else {
+        }
+        else {
             ds_N[tx][ty] = 0.0f;
         }
         __syncthreads();
@@ -157,15 +167,15 @@ double aiTiled(int J, int K, int L, int tileWidth)
     double blockCols = (L + tileWidth - 1) / tileWidth;
     double blockRows = (J + tileWidth - 1) / tileWidth;
     double bytes = 4.0 * (blockCols * J * (double)K
-                        + blockRows * K * (double)L
-                        + (double)J * L);
+        + blockRows * K * (double)L
+        + (double)J * L);
     return mmultFlops(J, K, L) / bytes;
 }
 
 struct Opts {
-    bool   warm          = !PROFILE_MODE;
-    bool   doNT          = true;
-    double tol           = 1e-3;
+    bool   warm = !PROFILE_MODE;
+    bool   doNT = true;
+    double tol = 1e-3;
 };
 
 double maxErrFraction(const float* h_Pcpu, const float* h_Pgpu, size_t n, size_t* where)
@@ -173,9 +183,9 @@ double maxErrFraction(const float* h_Pcpu, const float* h_Pgpu, size_t n, size_t
     double worst = 0.0;
     size_t w = 0;
     for (size_t i = 0; i < n; ++i) {
-        double ref   = h_Pcpu[i];
+        double ref = h_Pcpu[i];
         double denom = fabs(ref) > 1e-20 ? fabs(ref) : 1.0;
-        double e     = fabs(ref - h_Pgpu[i]) / denom;
+        double e = fabs(ref - h_Pgpu[i]) / denom;
         if (!(e <= worst)) {
             worst = std::isnan(e) ? INFINITY : e;
             w = i;
@@ -197,7 +207,7 @@ int theoreticalOccupancyPct(const void* kernel, int threadsPerBlock, const cudaD
 
 struct Ctx {
     int J, K, L;
-    const float *d_M, *d_N, *d_Nt;
+    const float* d_M, * d_N, * d_Nt;
     float* d_P;
     std::vector<float>* h_P;
     const std::vector<float>* h_Pcpu;
@@ -237,7 +247,7 @@ void report(Ctx& c, const char* name, dim3 block, float ms, double ai, int occ, 
     double gflops = mmultFlops(c.J, c.K, c.L) / (ms * 1e-3) / 1e9;
 
     HOST_PRINTF("  %-17s (%2u,%2u,%u) %9.3f ms %8.1f GFLOP/s  AI %5.2f FLOP/B  occ %3d%%  maxErrFrac %.3e  %s",
-                name, block.x, block.y, block.z, ms, gflops, ai, occ, err, ok ? "PASS" : "FAIL");
+        name, block.x, block.y, block.z, ms, gflops, ai, occ, err, ok ? "PASS" : "FAIL");
     if (!ok)
         HOST_PRINTF(" @(%zu,%zu)", where / c.L, where % c.L);
     if (transposeMs > 0.f)
@@ -245,7 +255,8 @@ void report(Ctx& c, const char* name, dim3 block, float ms, double ai, int occ, 
     HOST_PRINTF("\n");
 }
 
-void runTiled(Ctx& c, float transposeMs)
+template <int TILE_WIDTH>
+void runTiled(Ctx& c, float transposeMs, bool noFma)
 {
     dim3 threadsPerBlock(TILE_WIDTH, TILE_WIDTH, 1);
     dim3 blocksPerGrid((c.L + TILE_WIDTH - 1) / TILE_WIDTH, (c.J + TILE_WIDTH - 1) / TILE_WIDTH, 1);
@@ -254,24 +265,33 @@ void runTiled(Ctx& c, float transposeMs)
     char name[32];
 
     float ms = timeLaunch(c, [&] {
-        mmult_tiled<<<blocksPerGrid, threadsPerBlock>>>(c.d_M, c.d_N, c.d_P, c.J, c.K, c.L);
-    });
+        mmult_tiled<TILE_WIDTH, true> << <blocksPerGrid, threadsPerBlock >> > (c.d_M, c.d_N, c.d_P, c.J, c.K, c.L);
+        });
     snprintf(name, sizeof name, "tiled TW=%d", TILE_WIDTH);
     report(c, name, threadsPerBlock, ms, ai,
-           theoreticalOccupancyPct((const void*)mmult_tiled, nThreads, *c.prop));
+        theoreticalOccupancyPct((const void*)mmult_tiled<TILE_WIDTH, true>, nThreads, *c.prop));
 
     if (c.o->doNT) {
         ms = timeLaunch(c, [&] {
-            mmult_tiled_NT<<<blocksPerGrid, threadsPerBlock>>>(c.d_M, c.d_Nt, c.d_P, c.J, c.K, c.L);
-        });
+            mmult_tiled_NT<TILE_WIDTH> << <blocksPerGrid, threadsPerBlock >> > (c.d_M, c.d_Nt, c.d_P, c.J, c.K, c.L);
+            });
         snprintf(name, sizeof name, "tiled_NT TW=%d", TILE_WIDTH);
         report(c, name, threadsPerBlock, ms, ai,
-               theoreticalOccupancyPct((const void*)mmult_tiled_NT, nThreads, *c.prop),
-               transposeMs);
+            theoreticalOccupancyPct((const void*)mmult_tiled_NT<TILE_WIDTH>, nThreads, *c.prop),
+            transposeMs);
+    }
+
+    if (noFma) {
+        ms = timeLaunch(c, [&] {
+            mmult_tiled<TILE_WIDTH, false> << <blocksPerGrid, threadsPerBlock >> > (c.d_M, c.d_N, c.d_P, c.J, c.K, c.L);
+            });
+        snprintf(name, sizeof name, "tiled noFMA TW=%d", TILE_WIDTH);
+        report(c, name, threadsPerBlock, ms, ai,
+            theoreticalOccupancyPct((const void*)mmult_tiled<TILE_WIDTH, false>, nThreads, *c.prop));
     }
 }
 
-int runCase(int J, int K, int L, const Opts& o, const cudaDeviceProp& prop)
+int runCase(int J, int K, int L, bool noFma, const Opts& o, const cudaDeviceProp& prop)
 {
     HOST_PRINTF("\n=== P: %d x %d   M: %d x %d   N: %d x %d   (k = %d) ===\n", J, L, J, K, K, L, K);
 
@@ -288,26 +308,26 @@ int runCase(int J, int K, int L, const Opts& o, const cudaDeviceProp& prop)
         auto t1 = std::chrono::high_resolution_clock::now();
         double cpuMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
         HOST_PRINTF("  %-17s %19.3f ms %8.1f GFLOP/s\n", "CPU serial", cpuMs,
-                    mmultFlops(J, K, L) / (cpuMs * 1e-3) / 1e9);
+            mmultFlops(J, K, L) / (cpuMs * 1e-3) / 1e9);
     }
 
-    float *d_M, *d_N, *d_Nt = nullptr, *d_P;
+    float* d_M, * d_N, * d_Nt = nullptr, * d_P;
     CUDA_CHECK(cudaMalloc(&d_M, h_M.size() * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_N, h_N.size() * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_P, h_P.size() * sizeof(float)));
     CUDA_CHECK(cudaMemcpy(d_M, h_M.data(), h_M.size() * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_N, h_N.data(), h_N.size() * sizeof(float), cudaMemcpyHostToDevice));
 
-    Ctx c{J, K, L, d_M, d_N, nullptr, d_P, &h_P, &h_Pcpu, &o, &prop};
+    Ctx c{ J, K, L, d_M, d_N, nullptr, d_P, &h_P, &h_Pcpu, &o, &prop };
     CUDA_CHECK(cudaEventCreate(&c.start));
     CUDA_CHECK(cudaEventCreate(&c.stop));
 
     dim3 naiveBlock(16, 16, 1);
     dim3 naiveGrid((L + naiveBlock.x - 1) / naiveBlock.x, (J + naiveBlock.y - 1) / naiveBlock.y, 1);
     {
-        float ms = timeLaunch(c, [&] { mmult_gmem<<<naiveGrid, naiveBlock>>>(d_M, d_N, d_P, J, K, L); });
+        float ms = timeLaunch(c, [&] { mmult_gmem << <naiveGrid, naiveBlock >> > (d_M, d_N, d_P, J, K, L); });
         report(c, "naive v0 (gmem)", naiveBlock, ms, aiNaive(J, K, L),
-               theoreticalOccupancyPct((const void*)mmult_gmem, naiveBlock.x * naiveBlock.y, prop));
+            theoreticalOccupancyPct((const void*)mmult_gmem, naiveBlock.x * naiveBlock.y, prop));
     }
 
     float transposeMs = 0.f;
@@ -316,21 +336,24 @@ int runCase(int J, int K, int L, const Opts& o, const cudaDeviceProp& prop)
         c.d_Nt = d_Nt;
         dim3 tBlock(TRANSPOSE_TILE, TRANSPOSE_TILE, 1);
         dim3 tGrid((L + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE, (K + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE, 1);
-        if (o.warm) transpose_smem<<<tGrid, tBlock>>>(d_N, d_Nt, K, L);
+        if (o.warm) transpose_smem << <tGrid, tBlock >> > (d_N, d_Nt, K, L);
         CUDA_CHECK(cudaEventRecord(c.start));
-        transpose_smem<<<tGrid, tBlock>>>(d_N, d_Nt, K, L);
+        transpose_smem << <tGrid, tBlock >> > (d_N, d_Nt, K, L);
         CUDA_CHECK(cudaEventRecord(c.stop));
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaEventSynchronize(c.stop));
         CUDA_CHECK(cudaEventElapsedTime(&transposeMs, c.start, c.stop));
 
-        float ms = timeLaunch(c, [&] { mmult_gmem_NT<<<naiveGrid, naiveBlock>>>(d_M, d_Nt, d_P, J, K, L); });
+        float ms = timeLaunch(c, [&] { mmult_gmem_NT << <naiveGrid, naiveBlock >> > (d_M, d_Nt, d_P, J, K, L); });
         report(c, "naive_NT (gmem)", naiveBlock, ms, aiNaive(J, K, L),
-               theoreticalOccupancyPct((const void*)mmult_gmem_NT, naiveBlock.x * naiveBlock.y, prop),
-               transposeMs);
+            theoreticalOccupancyPct((const void*)mmult_gmem_NT, naiveBlock.x * naiveBlock.y, prop),
+            transposeMs);
     }
 
-    runTiled(c, transposeMs);
+    runTiled<8>(c, transposeMs, noFma);
+    runTiled<12>(c, transposeMs, noFma);
+    runTiled<16>(c, transposeMs, noFma);
+    runTiled<32>(c, transposeMs, noFma);
 
     CUDA_CHECK(cudaEventDestroy(c.start));
     CUDA_CHECK(cudaEventDestroy(c.stop));
@@ -348,20 +371,20 @@ int runMmult()
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     HOST_PRINTF("Device: %s  (sm_%d%d, %d SMs, max %d threads/SM, max %d threads/block, "
-                "%zu KB smem/SM, %d regs/SM)\n",
-                prop.name, prop.major, prop.minor, prop.multiProcessorCount,
-                prop.maxThreadsPerMultiProcessor, prop.maxThreadsPerBlock,
-                prop.sharedMemPerMultiprocessor / 1024, prop.regsPerMultiprocessor);
+        "%zu KB smem/SM, %d regs/SM)\n",
+        prop.name, prop.major, prop.minor, prop.multiProcessorCount,
+        prop.maxThreadsPerMultiProcessor, prop.maxThreadsPerBlock,
+        prop.sharedMemPerMultiprocessor / 1024, prop.regsPerMultiprocessor);
     HOST_PRINTF("Tolerance on max abs[Pcpu - Pgpu] / Pcpu: %.1e\n", o.tol);
     HOST_PRINTF("AI = FLOPs / GMEM bytes, no-cache model (Lecture 3)\n");
 
     int failures = 0;
     const int cases[3][3] = { {100, 100, 100}, {1000, 1000, 1000}, {2000, 2500, 3000} };
     for (int i = 0; i < 3; ++i)
-        failures += runCase(cases[i][0], cases[i][1], cases[i][2], o, prop);
+        failures += runCase(cases[i][0], cases[i][1], cases[i][2], i == 2, o, prop);
 
     HOST_PRINTF("\n%s (%d failing kernel run%s)\n",
-                failures ? "VERIFICATION FAILED" : "ALL KERNELS VERIFIED",
-                failures, failures == 1 ? "" : "s");
+        failures ? "VERIFICATION FAILED" : "ALL KERNELS VERIFIED",
+        failures, failures == 1 ? "" : "s");
     return failures ? 2 : 0;
 }
