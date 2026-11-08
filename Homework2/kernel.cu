@@ -172,7 +172,44 @@ int main(int argc, char** argv)
     CUDA_CHECK(cudaEventDestroy(stop));
     CUDA_CHECK(cudaFree(dKey));
     CUDA_CHECK(cudaFree(dOut));
-    return 0;
+    
+    Opts o;
+    int dims[3], nd = 0, onlyCase = 0;
+    for (int i = 1; i < argc; ++i) {
+        if      (!strcmp(argv[i], "-t")    && i + 1 < argc) o.onlyTW = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-case") && i + 1 < argc) onlyCase = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-tol")  && i + 1 < argc) o.tol = atof(argv[++i]);
+        else if (!strcmp(argv[i], "-nowarm")) o.warm = false;
+        else if (!strcmp(argv[i], "-nont"))   o.doNT = false;
+        else if (nd < 3) dims[nd++] = atoi(argv[i]);
+        else { fprintf(stderr, "unrecognised argument %s\n", argv[i]); return 1; }
+    }
+    if (o.onlyTW && o.onlyTW != 8 && o.onlyTW != 12 && o.onlyTW != 16 && o.onlyTW != 32) {
+        fprintf(stderr, "-t must be 8, 12, 16 or 32\n"); return 1;
+    }
+
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    printf("Device: %s  (sm_%d%d, %d SMs, max %d threads/SM, max %d threads/block, %zu KB smem/SM, %d regs/SM)\n",
+           prop.name, prop.major, prop.minor, prop.multiProcessorCount, prop.maxThreadsPerMultiProcessor,
+           prop.maxThreadsPerBlock, prop.sharedMemPerMultiprocessor / 1024, prop.regsPerMultiprocessor);
+    printf("Tolerance on max |Pcpu-Pgpu|/|Pcpu|: %.1e\n", o.tol);
+
+    int failures = 0;
+    if (nd == 3) {
+        failures += runCase(dims[0], dims[1], dims[2], o, prop);   // J K L
+    } else if (nd == 0) {
+        const int cases[3][3] = { {100, 100, 100}, {1000, 1000, 1000}, {2000, 2500, 3000} };  // J, K, L
+        for (int i = 0; i < 3; ++i)
+            if (onlyCase == 0 || onlyCase == i + 1)
+                failures += runCase(cases[i][0], cases[i][1], cases[i][2], o, prop);
+    } else {
+        fprintf(stderr, "give either no sizes or all three: J K L\n"); return 1;
+    }
+
+    printf("\n%s (%d failing kernel run%s)\n", failures ? "VERIFICATION FAILED" : "ALL KERNELS VERIFIED",
+           failures, failures == 1 ? "" : "s");
+    return failures ? 2 : 0;
 }
 // mmult.cu  --  MMULT variants: CPU reference, naive GPU (v0), shared-memory tiled GPU
 //
@@ -518,45 +555,4 @@ int runCase(int J, int K, int L, const Opts& o, const cudaDeviceProp& prop)
     CUDA_CHECK(cudaFree(dM)); CUDA_CHECK(cudaFree(dN)); CUDA_CHECK(cudaFree(dP));
     if (dNt) CUDA_CHECK(cudaFree(dNt));
     return c.failures;
-}
-
-int main(int argc, char** argv)
-{
-    Opts o;
-    int dims[3], nd = 0, onlyCase = 0;
-    for (int i = 1; i < argc; ++i) {
-        if      (!strcmp(argv[i], "-t")    && i + 1 < argc) o.onlyTW = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "-case") && i + 1 < argc) onlyCase = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "-tol")  && i + 1 < argc) o.tol = atof(argv[++i]);
-        else if (!strcmp(argv[i], "-nowarm")) o.warm = false;
-        else if (!strcmp(argv[i], "-nont"))   o.doNT = false;
-        else if (nd < 3) dims[nd++] = atoi(argv[i]);
-        else { fprintf(stderr, "unrecognised argument %s\n", argv[i]); return 1; }
-    }
-    if (o.onlyTW && o.onlyTW != 8 && o.onlyTW != 12 && o.onlyTW != 16 && o.onlyTW != 32) {
-        fprintf(stderr, "-t must be 8, 12, 16 or 32\n"); return 1;
-    }
-
-    cudaDeviceProp prop;
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
-    printf("Device: %s  (sm_%d%d, %d SMs, max %d threads/SM, max %d threads/block, %zu KB smem/SM, %d regs/SM)\n",
-           prop.name, prop.major, prop.minor, prop.multiProcessorCount, prop.maxThreadsPerMultiProcessor,
-           prop.maxThreadsPerBlock, prop.sharedMemPerMultiprocessor / 1024, prop.regsPerMultiprocessor);
-    printf("Tolerance on max |Pcpu-Pgpu|/|Pcpu|: %.1e\n", o.tol);
-
-    int failures = 0;
-    if (nd == 3) {
-        failures += runCase(dims[0], dims[1], dims[2], o, prop);   // J K L
-    } else if (nd == 0) {
-        const int cases[3][3] = { {100, 100, 100}, {1000, 1000, 1000}, {2000, 2500, 3000} };  // J, K, L
-        for (int i = 0; i < 3; ++i)
-            if (onlyCase == 0 || onlyCase == i + 1)
-                failures += runCase(cases[i][0], cases[i][1], cases[i][2], o, prop);
-    } else {
-        fprintf(stderr, "give either no sizes or all three: J K L\n"); return 1;
-    }
-
-    printf("\n%s (%d failing kernel run%s)\n", failures ? "VERIFICATION FAILED" : "ALL KERNELS VERIFIED",
-           failures, failures == 1 ? "" : "s");
-    return failures ? 2 : 0;
 }
