@@ -4,4 +4,5 @@
   </Configurations>
   <Project Path="Homework1/Homework1.vcxproj" />
   <Project Path="Homework2/Homework2.vcxproj" />
+  <Project Path="Homework3/Homework3.vcxproj" />
 </Solution>
